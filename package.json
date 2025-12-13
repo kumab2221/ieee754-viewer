@@ -9,13 +9,15 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:ieee754-viewer.open"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "ieee754-viewer.helloWorld",
-        "title": "Hello World"
+        "command": "ieee754-viewer.open",
+        "title": "IEEE754 Viewer: Open"
       }
     ]
   },
