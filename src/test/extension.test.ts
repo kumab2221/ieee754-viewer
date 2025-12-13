@@ -15,3 +15,4 @@ suite('Extension Test Suite', () => {
 });
 
 import "./parseFloatingInput.test";
+import "./ieee754Usecase.test";
