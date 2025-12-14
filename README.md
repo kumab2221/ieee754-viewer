@@ -27,17 +27,48 @@ IEEE754 Viewer は、浮動小数点数のバイナリ表現（IEEE 754形式）
 
 各数値について以下の情報を表示します：
 
-- **State**: Valid（有効）/ Incomplete（入力途中）/ Invalid（無効）
-- **Normalized Text**: 正規化された入力テキスト
-- **Kind**: 数値の種類（Zero / Subnormal / Normal / Infinity / NaN）
-- **Hex**: 16進数表現
-- **Bits**: ビット列全体（Pretty形式: 符号 指数 仮数）
-- **Sign Bit**: 符号ビット（0または1）
-- **Exponent (bits)**: 指数部のビット値
-- **Exponent (unbiased)**: バイアスを除いた指数値
-- **Mantissa**: 仮数部
-  - float32: 23ビット
-  - float64: 上位20ビット + 下位32ビット
+#### 基本情報
+- **state**: 入力状態（Valid / Incomplete / Invalid）
+- **normalized**: 正規化された入力テキスト（例: "+1" → "1", "inf" → "Infinity"）
+- **kind**: 数値の種類（Zero / Subnormal / Normal / Infinity / NaN）
+
+#### ビット表現（複数形式で表示）
+- **hex (bytes)**: バイト単位で区切った16進数
+  - float32: `3f 80 00 00` 形式（4バイト）
+  - float64: `3f f0 00 00 00 00 00 00` 形式（8バイト）
+- **bits (bytes)**: バイト単位で区切ったビット列
+  - 例: `00111111 10000000 00000000 00000000`
+
+#### フィールド別のビット情報
+- **s**: 符号ビット（`0` または `1`）
+- **e**: 指数部のビット列（4ビット区切り）
+  - float32: 8ビット（例: `0111 1111`）
+  - float64: 11ビット（例: `011 1111 1111`）
+- **m**: 仮数部のビット列（4ビット区切り）
+  - float32: 23ビット（例: `0000 0000 0000 0000 0000 000`）
+  - float64: 52ビット（例: `0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000`）
+
+#### 数値情報
+- **exponent(bits)**: 指数部のビット値（バイアス込み）
+  - float32: 0～255
+  - float64: 0～2047
+- **exponent(unbiased)**: バイアスを除いた指数値
+  - Normal: 実際の指数（float32: bias=127, float64: bias=1023）
+  - Subnormal: 固定値（float32: -126, float64: -1022）
+  - Zero/Infinity/NaN: 表示されない（"-"）
+
+#### 仮数部の詳細
+- **float32の場合**:
+  - **mantissa (uint)**: 仮数部の整数値（0～8388607）
+- **float64の場合**:
+  - **mantissaHigh(20)**: 仮数部の上位20ビット
+  - **mantissaLow(32)**: 仮数部の下位32ビット
+
+#### NaN特有の情報（NaNの場合のみ表示）
+- **NaN payload (bits)**: NaNペイロード（仮数部）のビット列（4ビット区切り）
+- **NaN payload (hex)**: NaNペイロードの16進数表現
+  - float32: 6桁（23ビット）
+  - float64: 13桁（52ビット）
 
 ## 使い方
 
@@ -54,14 +85,29 @@ IEEE754 Viewer は、浮動小数点数のバイナリ表現（IEEE 754形式）
 
 入力フィールドに数値を入力すると、リアルタイムでビット表現が更新されます。
 
-### 入力例
+### 入力例と出力
 
 ```
-1.0       → 3f800000 (float) / 3ff0000000000000 (double)
--1.25     → bf800000 (float)
-1e-3      → 0.001 の表現
-NaN       → NaN 表現
-Infinity  → 無限大
+入力: 1.0
+float32 hex:  3f 80 00 00
+float64 hex:  3f f0 00 00 00 00 00 00
+
+入力: -1.25
+float32 hex:  bf a0 00 00
+float64 hex:  bf f4 00 00 00 00 00 00
+
+入力: 1e-3 (= 0.001)
+float32 hex:  3a 83 12 6f
+float64 hex:  3f 50 62 4d d2 f1 a9 fc
+
+入力: NaN
+float32 hex:  7f c0 00 00
+float64 hex:  7f f8 00 00 00 00 00 00
+NaN payload も表示されます
+
+入力: Infinity
+float32 hex:  7f 80 00 00
+float64 hex:  7f f0 00 00 00 00 00 00
 ```
 
 ## プロジェクト構造
@@ -126,14 +172,21 @@ IEEE 754 標準に基づく実際のビット操作を実装します。
 主な関数：
 - `float32Bits(value: number): Float32BitsInfo`
   - JavaScriptのnumberをfloat32に変換してビット情報を抽出
+  - 返り値には生データとUI表示用のグループ化データを含む
 - `float64Bits(value: number): Float64BitsInfo`
   - double（float64）のビット情報を抽出
+  - 返り値には生データとUI表示用のグループ化データを含む
 
 実装の詳細：
 - `DataView` を使用したバイナリ操作
 - Little-endianでの一貫したバイト順
 - 符号ビット、指数ビット、仮数ビットの抽出
 - 数値の種類の分類（Zero, Subnormal, Normal, Infinity, NaN）
+- UI表示用に複数のフォーマットを生成:
+  - バイト単位でグループ化された16進数（`hexGrouped`）
+  - バイト単位でグループ化されたビット列（`bitsGrouped8`）
+  - 4ビット単位でグループ化された指数部・仮数部（`exponentGrouped4`, `mantissaGrouped4`）
+  - NaNペイロードの16進数表現（`payloadHexPadded`）
 
 #### 4. Presentation層 ([src/extension.ts](src/extension.ts))
 
@@ -209,7 +262,7 @@ pnpm run test
 
 ## 技術的な特徴
 
-### 入力検証の工夫
+### 1. 入力検証の工夫
 
 このプロジェクトの重要な設計上の工夫は、**Incomplete状態の明示的なサポート**です。
 
@@ -228,13 +281,31 @@ pnpm run test
 "1ee3"   → Invalid (不正な構文)
 ```
 
-### IEEE 754 の実装
+### 2. UI表示の最適化
+
+ビット情報を複数の形式で提供することで、ユーザーが理解しやすい表示を実現：
+
+- **バイト区切り**: メモリレイアウトの理解に最適
+  - 16進数: `3f 80 00 00`（各バイトが視覚的に分離）
+  - ビット列: `00111111 10000000 00000000 00000000`
+
+- **4ビット区切り**: 16進数との対応関係が明確
+  - 指数部: `0111 1111`（各グループが16進数1桁に対応）
+  - 仮数部: `0000 0000 0000 0000 0000 000`
+
+- **フィールド分離**: s（符号）、e（指数）、m（仮数）を個別に表示
+
+この多層的な表示により、初学者から専門家まで幅広いユーザーのニーズに対応しています。
+
+### 3. IEEE 754 の実装
 
 JavaScript の `number` 型は IEEE 754 double（binary64）です。float32 を表現するには以下の手順を取ります：
 
 1. `DataView` を使用して `ArrayBuffer` に値を書き込み
 2. `setFloat32()` でfloat32として格納
 3. `getUint32()` でビットパターンを読み取り
+4. ビットシフトとマスク演算で各フィールドを抽出
+5. UI表示用に複数フォーマットを生成
 
 ```typescript
 const buf = new ArrayBuffer(4);
@@ -242,18 +313,34 @@ const view = new DataView(buf);
 view.setFloat32(0, value, true);  // little-endian
 const u32 = view.getUint32(0, true);
 
+// ビット演算で各フィールドを抽出
 const signBit = (u32 >>> 31) & 1;
 const exponentBits = (u32 >>> 23) & 0xff;
 const mantissaBits = u32 & 0x7fffff;
+
+// グループ化された表示用データを生成
+const hexGrouped = "3f 80 00 00";           // バイト区切り
+const exponentGrouped4 = "0111 1111";        // 4ビット区切り
+const mantissaGrouped4 = "0000 0000 ...";   // 4ビット区切り
 ```
 
-### Webview の実装
+#### NaNペイロードのサポート
+
+NaN（非数）の場合、仮数部はペイロード（追加情報）として利用できます。この拡張機能では、NaNペイロードをビット列と16進数の両方で表示し、デバッグやシグナリングNaNの識別に役立てています。
+
+### 4. Webview の実装
 
 VSCode の Webview API を使用してインタラクティブなUIを提供：
 
 - `postMessage()` による双方向通信
-- Content Security Policy によるセキュリティ確保
+  - Webview → Extension: ユーザー入力の送信
+  - Extension → Webview: ビューモデルの更新
+- Content Security Policy（CSP）によるセキュリティ確保
+  - nonceを使用したインラインスクリプトの制限
+  - XSS攻撃の防止
 - `retainContextWhenHidden` でパネルの状態を保持
+- リアルタイム更新: 入力のたびに即座にビット表現を更新
+- 入力フィルタリング: 不正な文字の入力を防止（UI層とDomain層の二重チェック）
 
 ## 参考資料
 
@@ -273,7 +360,12 @@ VSCode の Webview API を使用してインタラクティブなUIを提供：
 - 入力パーサー（Valid/Incomplete/Invalid状態のサポート）
 - Webview ベースのUI
 - NaN、Infinity、指数表記のサポート
+- グループ化されたビット表現:
+  - バイト単位の16進数・ビット列表示
+  - 4ビット区切りの指数部・仮数部表示
+- NaNペイロード情報の表示
 - 包括的なテストスイート
+- 詳細なコードコメント（JSDoc形式）
 
 ---
 

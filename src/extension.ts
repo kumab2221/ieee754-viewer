@@ -1,48 +1,107 @@
+// src/extension.ts
+// VSCode拡張機能のエントリーポイント
+// Webviewを使用してIEEE 754ビューワーのUIを提供
+
 import * as vscode from "vscode";
 import { buildViewModel, Precision } from "./application/ieee754Usecase";
 
+/**
+ * 拡張機能のアクティベーション関数
+ *
+ * VSCodeが拡張機能をロードする際に呼ばれる
+ * コマンド "ieee754-viewer.open" を登録し、Webviewパネルを作成
+ *
+ * @param context 拡張機能のコンテキスト（subscriptionsなどを管理）
+ */
 export function activate(context: vscode.ExtensionContext) {
+  // コマンド "ieee754-viewer.open" を登録
   const disposable = vscode.commands.registerCommand("ieee754-viewer.open", () => {
+    // Webviewパネルを作成
+    // - viewType: 内部識別子
+    // - title: パネルのタイトル
+    // - column: 表示位置（ViewColumn.One = 最初のカラム）
     const panel = vscode.window.createWebviewPanel(
       "ieee754Viewer",
       "IEEE754 Viewer",
       vscode.ViewColumn.One,
       {
-        enableScripts: true,
-        retainContextWhenHidden: true,
+        enableScripts: true,              // Webview内でJavaScriptを実行可能にする
+        retainContextWhenHidden: true,    // パネルが隠れても状態を保持
       }
     );
 
+    // WebviewのHTMLコンテンツを設定
     panel.webview.html = getWebviewHtml(panel.webview);
 
-    // Initial render
+    // 初期描画: float と double の両方を空の入力で初期化
     postRender(panel.webview, "float", "");
     postRender(panel.webview, "double", "");
 
+    // Webviewからのメッセージを受信（ユーザーが入力した時）
     panel.webview.onDidReceiveMessage((msg) => {
+      // メッセージの型チェック
       if (!msg || typeof msg !== "object") return;
 
+      // "update" メッセージ: ユーザーが入力フィールドを変更した
       if (msg.type === "update") {
         const precision = msg.precision as Precision;
         const text = typeof msg.text === "string" ? msg.text : "";
+
+        // 精度が有効な値かチェック
         if (precision !== "float" && precision !== "double") return;
 
+        // ビューモデルを構築してWebviewに送信
         postRender(panel.webview, precision, text);
       }
     });
   });
 
+  // 拡張機能が無効化される際にコマンドを破棄
   context.subscriptions.push(disposable);
 }
 
+/**
+ * 拡張機能の非アクティベーション関数
+ *
+ * VSCodeが拡張機能をアンロードする際に呼ばれる
+ * 現在は特にクリーンアップ処理は不要
+ */
 export function deactivate() {}
 
+/**
+ * ビューモデルを構築してWebviewに送信
+ *
+ * Application層のbuildViewModel関数を呼び出し、
+ * 結果をpostMessageでWebviewに送る
+ *
+ * @param webview VSCodeのWebviewインスタンス
+ * @param precision 精度（"float" または "double"）
+ * @param text ユーザーが入力したテキスト
+ */
 function postRender(webview: vscode.Webview, precision: Precision, text: string) {
+  // ビューモデルを構築
   const vm = buildViewModel(text, precision);
+  // Webviewに送信（Webview側でrenderVm関数が処理）
   webview.postMessage({ type: "render", precision, vm });
 }
 
+/**
+ * WebviewのHTMLコンテンツを生成
+ *
+ * セキュリティ:
+ * - CSP（Content Security Policy）を設定してXSS攻撃を防止
+ * - nonceを使用してインラインスクリプトを許可
+ *
+ * UI構成:
+ * - 左側: float（binary32）用の入力・表示
+ * - 右側: double（binary64）用の入力・表示
+ * - 各カードに入力フィールドとビット情報の表示エリア
+ *
+ * @param webview VSCodeのWebviewインスタンス
+ * @returns HTML文字列
+ */
 function getWebviewHtml(webview: vscode.Webview): string {
+  // セキュリティ用のnonce（使い捨てトークン）を生成
   const nonce = getNonce();
 
   return /* html */ `<!doctype html>
@@ -98,34 +157,52 @@ function getWebviewHtml(webview: vscode.Webview): string {
   </div>
 
   <script nonce="${nonce}">
+    // VSCode APIを取得（Webview → Extension通信用）
     const vscode = acquireVsCodeApi();
 
+    // DOM要素の取得
     const floatInput = document.getElementById("floatInput");
     const doubleInput = document.getElementById("doubleInput");
     const floatOut = document.getElementById("floatOut");
     const doubleOut = document.getElementById("doubleOut");
 
-    // UI filter: allow only characters that could be part of numeric / NaN / Inf / Infinity.
-    // Final validation is in Domain.
+    // UI側での簡易的な入力フィルタ
+    // 数値、NaN、Infinity関連の文字のみ許可
+    // 最終的な検証はDomain層で実施
     const allowedChar = /^[0-9eE+\\-\\.aAiInNfFtTyY]$/;
 
+    /**
+     * 入力フィールドに入力制限とイベントリスナーを設定
+     *
+     * - beforeinput: 不正な文字の入力を防止
+     * - paste: ペースト時に不正な文字をフィルタリング
+     * - input: 入力のたびにExtensionに更新を要求
+     *
+     * @param inputEl 入力要素
+     * @param precision 精度（"float" または "double"）
+     */
     function attachGuards(inputEl, precision) {
+      // 文字入力前のイベント（入力防止に使用）
       inputEl.addEventListener("beforeinput", (ev) => {
         if (typeof ev.data === "string" && ev.data.length > 0) {
+          // 入力される各文字をチェック
           for (const ch of ev.data) {
             if (!allowedChar.test(ch)) {
-              ev.preventDefault();
+              ev.preventDefault();  // 不正な文字の入力を阻止
               return;
             }
           }
         }
       });
 
+      // ペーストイベント（不正な文字をフィルタリング）
       inputEl.addEventListener("paste", (ev) => {
         const text = (ev.clipboardData || window.clipboardData)?.getData("text") || "";
         const filtered = [...text].filter(ch => allowedChar.test(ch)).join("");
+        // ペースト内容に不正な文字が含まれていた場合
         if (filtered !== text) {
           ev.preventDefault();
+          // フィルタリング後のテキストを手動で挿入
           const start = inputEl.selectionStart ?? inputEl.value.length;
           const end = inputEl.selectionEnd ?? inputEl.value.length;
           const next = inputEl.value.slice(0, start) + filtered + inputEl.value.slice(end);
@@ -134,18 +211,40 @@ function getWebviewHtml(webview: vscode.Webview): string {
         }
       });
 
+      // 入力イベント（入力のたびに発火）
       inputEl.addEventListener("input", () => {
         requestUpdate(precision, inputEl.value);
       });
     }
 
+    /**
+     * Extensionに更新を要求
+     *
+     * postMessageでExtension側にメッセージを送信
+     * Extension側でbuildViewModelが呼ばれ、結果が返ってくる
+     *
+     * @param precision 精度（"float" または "double"）
+     * @param text 入力テキスト
+     */
     function requestUpdate(precision, text) {
       vscode.postMessage({ type: "update", precision, text });
     }
 
+    /**
+     * ビューモデルをHTMLにレンダリング
+     *
+     * 状態に応じて表示内容を切り替え:
+     * - Incomplete: 途中入力メッセージ（グレー表示）
+     * - Invalid: エラーメッセージ（赤表示）
+     * - Valid: ビット情報の詳細表示
+     *
+     * @param vm ビューモデル
+     * @returns HTML文字列
+     */
     function renderVm(vm) {
       if (!vm) return "<div class='muted'>No data</div>";
 
+      // 途中入力の場合
       if (vm.state === "Incomplete") {
         return \`
           <div class="mono">
@@ -164,9 +263,10 @@ function getWebviewHtml(webview: vscode.Webview): string {
         \`;
       }
 
-      // Valid
+      // 有効な数値の場合: ビット情報を詳細に表示
       const b = vm.bits;
 
+      // 基本情報（state, kind, hex, bits, s/e/m, exponent）
       const base = \`
         <div class="kv mono">
           <div class="k">state</div><div class="v">Valid</div>
@@ -185,14 +285,17 @@ function getWebviewHtml(webview: vscode.Webview): string {
         </div>
       \`;
 
+      // 仮数部の詳細情報（精度によって表示内容が異なる）
       let mantissaExtra = "";
       if (vm.precision === "float") {
+        // float32: 23ビットを1つの整数値として表示
         mantissaExtra = \`
           <div class="kv mono" style="margin-top:8px;">
             <div class="k">mantissa (uint)</div><div class="v">\${b.mantissaBits}</div>
           </div>
         \`;
       } else {
+        // float64: 52ビットを上位20ビット+下位32ビットに分けて表示
         mantissaExtra = \`
           <div class="kv mono" style="margin-top:8px;">
             <div class="k">mantissaHigh(20)</div><div class="v">\${b.mantissaHigh}</div>
@@ -201,6 +304,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
         \`;
       }
 
+      // NaNの場合のみペイロード情報を表示
       let nanPayload = "";
       if (b.kind === "NaN") {
         nanPayload = \`
@@ -214,6 +318,14 @@ function getWebviewHtml(webview: vscode.Webview): string {
       return base + mantissaExtra + nanPayload;
     }
 
+    /**
+     * HTMLエスケープ処理
+     *
+     * XSS攻撃を防ぐために特殊文字をエスケープ
+     *
+     * @param s エスケープする文字列
+     * @returns エスケープされた文字列
+     */
     function escapeHtml(s) {
       return String(s)
         .replaceAll("&", "&amp;")
@@ -223,10 +335,12 @@ function getWebviewHtml(webview: vscode.Webview): string {
         .replaceAll("'", "&#039;");
     }
 
+    // Extensionからのメッセージを受信（ビューモデルの更新）
     window.addEventListener("message", (event) => {
       const msg = event.data;
       if (!msg || msg.type !== "render") return;
 
+      // 精度に応じて適切な出力エリアに描画
       if (msg.precision === "float") {
         floatOut.innerHTML = renderVm(msg.vm);
       } else if (msg.precision === "double") {
@@ -234,10 +348,11 @@ function getWebviewHtml(webview: vscode.Webview): string {
       }
     });
 
+    // 入力フィールドにイベントリスナーを設定
     attachGuards(floatInput, "float");
     attachGuards(doubleInput, "double");
 
-    // initial
+    // 初期描画を要求（空の入力で開始）
     requestUpdate("float", floatInput.value || "");
     requestUpdate("double", doubleInput.value || "");
   </script>
@@ -245,6 +360,14 @@ function getWebviewHtml(webview: vscode.Webview): string {
 </html>`;
 }
 
+/**
+ * セキュリティ用のnonce（使い捨トークン）を生成
+ *
+ * CSPでインラインスクリプトを許可するために使用
+ * ランダムな32文字の英数字文字列を生成
+ *
+ * @returns nonce文字列
+ */
 function getNonce() {
   let text = "";
   const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
