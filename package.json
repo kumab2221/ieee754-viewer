@@ -2,7 +2,7 @@
   "name": "ieee754-viewer",
   "displayName": "ieee754-viewer",
   "description": "",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.107.0"
   },
@@ -46,5 +46,14 @@
     "typescript": "^5.9.3",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kumab2221/ieee754-viewer.git"
+  },
+  "homepage": "https://github.com/kumab2221/ieee754-viewer",
+  "bugs": {
+    "url": "https://github.com/kumab2221/ieee754-viewer/issues"
   }
+
 }
