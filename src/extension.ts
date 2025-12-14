@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { buildViewModel, Precision, ViewModel } from "./application/ieee754Usecase";
+import { buildViewModel, Precision } from "./application/ieee754Usecase";
 
 export function activate(context: vscode.ExtensionContext) {
   const disposable = vscode.commands.registerCommand("ieee754-viewer.open", () => {
@@ -15,7 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     panel.webview.html = getWebviewHtml(panel.webview);
 
-    // 初期描画
+    // Initial render
     postRender(panel.webview, "float", "");
     postRender(panel.webview, "double", "");
 
@@ -63,8 +63,6 @@ function getWebviewHtml(webview: vscode.Webview): string {
     input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; white-space: pre-wrap; word-break: break-all; }
     .muted { opacity: 0.75; }
-    .ok { }
-    .warn { }
     .err { color: var(--vscode-errorForeground); }
     .kv { display: grid; grid-template-columns: 140px 1fr; gap: 8px; margin-top: 8px; }
     .kv > div { padding: 4px 0; border-bottom: 1px dashed rgba(127,127,127,0.25); }
@@ -107,13 +105,12 @@ function getWebviewHtml(webview: vscode.Webview): string {
     const floatOut = document.getElementById("floatOut");
     const doubleOut = document.getElementById("doubleOut");
 
-    // UI側の「明らかな無関係文字」だけを落とす（完全判定はDomain）
-    // ここは "途中入力" を壊さないことが最優先
-    const allowedChar = /^[0-9eE+\\-\\.a-zA-Z]$/;
+    // UI filter: allow only characters that could be part of numeric / NaN / Inf / Infinity.
+    // Final validation is in Domain.
+    const allowedChar = /^[0-9eE+\\-\\.aAiInNfFtTyY]$/;
 
     function attachGuards(inputEl, precision) {
       inputEl.addEventListener("beforeinput", (ev) => {
-        // IMEなどは inputType/data が特殊になるので、dataがあるときだけ軽くフィルタ
         if (typeof ev.data === "string" && ev.data.length > 0) {
           for (const ch of ev.data) {
             if (!allowedChar.test(ch)) {
@@ -126,7 +123,6 @@ function getWebviewHtml(webview: vscode.Webview): string {
 
       inputEl.addEventListener("paste", (ev) => {
         const text = (ev.clipboardData || window.clipboardData)?.getData("text") || "";
-        // 貼り付けはフィルタして差し替え
         const filtered = [...text].filter(ch => allowedChar.test(ch)).join("");
         if (filtered !== text) {
           ev.preventDefault();
@@ -152,7 +148,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
 
       if (vm.state === "Incomplete") {
         return \`
-          <div class="mono warn">
+          <div class="mono">
             <div class="muted">State: Incomplete</div>
             <div class="muted">Reason: \${escapeHtml(vm.message || "")}</div>
           </div>
@@ -170,34 +166,52 @@ function getWebviewHtml(webview: vscode.Webview): string {
 
       // Valid
       const b = vm.bits;
-      const common = \`
+
+      const base = \`
         <div class="kv mono">
           <div class="k">state</div><div class="v">Valid</div>
           <div class="k">normalized</div><div class="v">\${escapeHtml(vm.normalizedText)}</div>
           <div class="k">kind</div><div class="v">\${escapeHtml(b.kind)}</div>
-          <div class="k">hex</div><div class="v">\${escapeHtml(b.hex)}</div>
-          <div class="k">bits</div><div class="v">\${escapeHtml(b.pretty)}</div>
-          <div class="k">sign</div><div class="v">\${b.signBit}</div>
+
+          <div class="k">hex (bytes)</div><div class="v">\${escapeHtml(b.hexGrouped)}</div>
+          <div class="k">bits (bytes)</div><div class="v">\${escapeHtml(b.bitsGrouped8)}</div>
+
+          <div class="k">s</div><div class="v">\${escapeHtml(b.signBitsStr)}</div>
+          <div class="k">e</div><div class="v">\${escapeHtml(b.exponentGrouped4)}</div>
+          <div class="k">m</div><div class="v">\${escapeHtml(b.mantissaGrouped4)}</div>
+
           <div class="k">exponent(bits)</div><div class="v">\${b.exponentBits}</div>
           <div class="k">exponent(unbiased)</div><div class="v">\${b.exponentUnbiased === null ? "-" : b.exponentUnbiased}</div>
         </div>
       \`;
 
-      // float32 と float64 で mantissa 表示が違う
+      let mantissaExtra = "";
       if (vm.precision === "float") {
-        return common + \`
+        mantissaExtra = \`
           <div class="kv mono" style="margin-top:8px;">
-            <div class="k">mantissa</div><div class="v">\${b.mantissaBits}</div>
+            <div class="k">mantissa (uint)</div><div class="v">\${b.mantissaBits}</div>
           </div>
         \`;
       } else {
-        return common + \`
+        mantissaExtra = \`
           <div class="kv mono" style="margin-top:8px;">
             <div class="k">mantissaHigh(20)</div><div class="v">\${b.mantissaHigh}</div>
             <div class="k">mantissaLow(32)</div><div class="v">\${b.mantissaLow}</div>
           </div>
         \`;
       }
+
+      let nanPayload = "";
+      if (b.kind === "NaN") {
+        nanPayload = \`
+          <div class="kv mono" style="margin-top:8px;">
+            <div class="k">NaN payload (bits)</div><div class="v">\${escapeHtml(b.payloadGrouped4)}</div>
+            <div class="k">NaN payload (hex)</div><div class="v">\${escapeHtml(b.payloadHexPadded)}</div>
+          </div>
+        \`;
+      }
+
+      return base + mantissaExtra + nanPayload;
     }
 
     function escapeHtml(s) {
@@ -223,7 +237,7 @@ function getWebviewHtml(webview: vscode.Webview): string {
     attachGuards(floatInput, "float");
     attachGuards(doubleInput, "double");
 
-    // 起動直後に一度送って描画を安定させる（ホスト側でも初期描画しているが保険）
+    // initial
     requestUpdate("float", floatInput.value || "");
     requestUpdate("double", doubleInput.value || "");
   </script>

@@ -30,3 +30,11 @@ suite("ieee754 usecase", () => {
     assert.strictEqual(vm.bits.kind, "NaN");
   });
 });
+
+test("hex grouped", () => {
+  const vm = buildViewModel("1.0", "float");
+  assert.strictEqual(vm.state, "Valid");
+  if (vm.state !== "Valid") return;
+  assert.strictEqual(vm.bits.hexGrouped, "3f 80 00 00");
+});
+
